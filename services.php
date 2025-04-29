@@ -1,95 +1,117 @@
 <?php
+require "./cors.php";
+require "./db.php";
+session_start();
 
-require 'db.php';
+$method = $_SERVER['REQUEST_METHOD'];
 
-if (isset($_POST['action']) && $_POST['action'] == 'services') {
-    $title = $_POST['title'];
-    $content = $_POST['content'];
-
-    $stmt = $conn->prepare("INSERT INTO services (title, content) VALUES (?, ?)");
-    $stmt->bind_param("ss", $title, $content);
-
-    if ($stmt->execute()) {
-        echo "Add service successful";
-    } else {
-        echo "Add service error" . $stmt->error;
-    }
-    $stmt->close();
-}
-
-if (isset($_GET['action']) && $_GET['action'] == 'services') {
-    $stmt = $conn->prepare("SELECT title, content FROM services");
+if ($method === 'GET') {
+    $stmt = $conn->prepare("SELECT id, title, content FROM services");
     $stmt->execute();
-
     $result = $stmt->get_result();
+
     $all_service = [];
     while ($row = $result->fetch_assoc()) {
         $all_service[] = $row;
     }
     echo json_encode($all_service);
+
     $stmt->close();
+    $conn->close();
+    exit();
 }
 
-// Only handle PUT requests
-if ($_SERVER['REQUEST_METHOD'] === 'PUT') {
-    // Create $_PUT manually
-    parse_str(file_get_contents("php://input"), $_PUT);
+if ($method === 'POST') {
+    $rawData = file_get_contents('php://input');
+    $data = json_decode($rawData, true);
 
-    if (isset($_PUT['action']) && $_PUT['action'] == 'services') {
-        echo "-------"; // for testing
+    if (!isset($data['title']) || !isset($data['content'])) {
+        echo json_encode(["status" => "error", "message" => "Title and Content are required"]);
+        exit();
+    }
 
-        $id = $_PUT['id'];
-        $title = $_PUT['title'];
-        $content = $_PUT['content'];
+    $title = $data['title'];
+    $content = $data['content'];
 
-        // Assuming $conn is your mysqli connection
-        $stmt = $conn->prepare("UPDATE services SET title = ?, content = ? WHERE id = ?");
-        $stmt->bind_param("ssi", $title, $content, $id);
+    $stmt = $conn->prepare("SELECT id FROM services WHERE title = ? AND content = ?");
+    $stmt->bind_param("ss", $title, $content);
+    $stmt->execute();
+    $stmt->store_result();
 
-        try {
-            if ($stmt->execute()) {
-                if ($stmt->affected_rows > 0) {
-                    $response = [
-                        'status' => 'success',
-                        'message' => 'Service updated successfully!',
-                        'data' => [
-                            'id' => $id,
-                            'title' => $title,
-                            'content' => $content
-                        ]
-                    ];
-                    echo json_encode($response);
-                } else {
-                    echo json_encode([
-                        'status' => 'error',
-                        'message' => 'Service not found'
-                    ]);
-                }
-            } else {
-                echo json_encode([
-                    'status' => 'error',
-                    'message' => 'Error updating service',
-                    'error' => $stmt->error
-                ]);
-            }
-        } catch (Exception $e) {
-            echo json_encode([
-                'status' => 'error',
-                'message' => 'Internal server error',
-                'error' => $e->getMessage()
-            ]);
+    if ($stmt->num_rows > 0) {
+        echo json_encode(["status" => "error", "message" => "This service already exists."]);
+        $stmt->close();
+        $conn->close();
+        exit();
+    }
+    $stmt->close();
+
+    $stmt = $conn->prepare("INSERT INTO services (title, content) VALUES (?, ?)");
+    $stmt->bind_param("ss", $title, $content);
+
+    if ($stmt->execute()) {
+        echo json_encode([
+            "status" => "success",
+            "message" => "Service added successfully",
+            "data" => [
+                "id" => $stmt->insert_id,
+                "title" => $title,
+                "content" => $content,
+            ]
+        ]);
+    } else {
+        echo json_encode(["status" => "error", "message" => "Failed to add service"]);
+    }
+    $stmt->close();
+    $conn->close();
+    exit();
+}
+
+if ($method === 'PUT') {
+    // Update or Delete service
+    $rawData = file_get_contents("php://input");
+    $data = json_decode($rawData, true);
+
+    $id = $_PUT['id'] ?? null;
+    $title = $_PUT['title'] ?? null;
+    $content = $_PUT['content'] ?? null;
+
+    if (!$id) {
+        echo json_encode(["status" => "error", "message" => "ID is required"]);
+        exit();
+    }
+
+    if ($title === null && $content === null) {
+        // DELETE
+        $stmt = $conn->prepare("DELETE FROM services WHERE id = ?");
+        $stmt->bind_param('i', $id);
+        $stmt->execute();
+
+        if ($stmt->affected_rows > 0) {
+            echo json_encode(["status" => "success", "message" => "Service deleted successfully"]);
+        } else {
+            echo json_encode(["status" => "error", "message" => "No service found with this ID"]);
         }
 
         $stmt->close();
-    } else {
-        echo json_encode([
-            'status' => 'error',
-            'message' => 'Invalid action'
-        ]);
+        $conn->close();
+        exit();
+    } else{
+        // UPDATE
+        $stmt = $conn->prepare("UPDATE services SET title = ?, content = ? WHERE id = ?");
+        $stmt->bind_param("ssi", $title, $content, $id);
+        $stmt->execute();
+    
+        if ($stmt->affected_rows > 0) {
+            echo json_encode(["status" => "success", "message" => "Service updated successfully"]);
+        } else {
+            echo json_encode(["status" => "error", "message" => "Service not found or no changes made"]);
+        }
     }
-} else {
-    echo json_encode([
-        'status' => 'error',
-        'message' => 'Invalid request method'
-    ]);
+
+    $stmt->close();
+    $conn->close();
+    exit();
 }
+
+echo json_encode(["status" => "error", "message" => "Unsupported request method"]);
